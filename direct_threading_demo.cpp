@@ -16,9 +16,10 @@ method (Engine::runFile) fit on a single screen.
 #include <vector>
 #include <fstream>
 #include <map>
+#include <limits>
 
 //  Use this to turn on or off some debug-level tracing.
-#define DEBUG 0
+constexpr bool DEBUG = false;
 
 //  Syntactic sugar to emphasise the 'break'.
 #define break_if( E ) if ( E ) break
@@ -30,15 +31,31 @@ method (Engine::runFile) fit on a single screen.
 #define return_if( E ) if (E) return
 
 //  We use the address of a label to play the role of an operation-code.
-typedef void * OpCode;
+using OpCode = void*;
+
+constexpr size_t numberOfOpCodes = 9;
+constexpr size_t OperatorToOpCodeIndex(const char& opcodeCharacter) {
+    switch (opcodeCharacter) {
+        case '+': return 0;
+        case '-': return 1;
+        case '<': return 2;
+        case '>': return 3;
+        case '[': return 4;
+        case ']': return 5;
+        case '.': return 6;
+        case ',': return 7;
+        case '\0': return 8;
+        default: return std::numeric_limits::max<size_t>();
+    }
+}
 
 //  The instruction stream is mainly OpCodes but there are some
 //  integer arguments interspersed. Strictly speaking this makes this
 //  interpreter a hybrid between direct/indirect threading.
-typedef union {
+union  Instruction {
     OpCode opcode;
     int operand;
-} Instruction;
+};
 
 //  This class is responsible for translating the stream of source code
 //  into a vector<Instruction>. It is passed a mapping from characters
@@ -46,60 +63,63 @@ typedef union {
 //  pointer to the implementing code. 
 class CodePlanter {
     std::ifstream input;                //  The source code to be read in.
-    const std::map<char, OpCode> & opcode_map;
+    const std::array<numberOfOpCodes, OpCode> & opcode_map;
     std::vector<Instruction> & program; 
     std::vector<int> indexes;           //  Responsible for managing [ ... ] loops.
 
 public:
     CodePlanter( 
         std::string_view filename, 
-        const std::map<char, OpCode> & opcode_map, 
+        const std::array<, OpCode> & opcode_map, 
         std::vector<Instruction> & program 
     ) :
         input( filename.data(), std::ios::in ),
         opcode_map( opcode_map ),
         program( program )
     {}
-
+    CodePlanter(CodePlanter&&) noexcept = default;
+    CodePlanter(const CodePlanter&) noexcept = default;
+    // Contains references not not trival assignable
 private:
     void plantChar( char ch ) {
         //  Guard - skip characters that do not correspond to abstract machine
-        //  operations.
-        auto it = opcode_map.find(ch);
-        return_if( it == opcode_map.end() );
+        //  operations
+        const auto opcodeIndex = OperatorToOpCodeIndex(ch);
+        return_if( opcodeIndex > numberOfOpCodes );
 
         //  Body
-        program.push_back( { it->second } );
+        program.push_back( { opcode_map[opcodeIndex] } );
         //  If we are dealing with loops, we plant the absolute index of the
         //  operation in the program we want to jump to. This can be improved
         //  fairly easily.
         if ( ch == '[' ) {
-            indexes.push_back( program.size() );
-            program.push_back( {nullptr} );         //  Dummy value, will be overwritten.
+            indexes.emplace_back( program.size() );
+            program.emplace_back( {nullptr} );         //  Dummy value, will be overwritten.
         } else if ( ch == ']' ) {
-            int end = program.size();
+            size_t end = program.size();
             int start = indexes.back();
             indexes.pop_back();
             program[ start ].operand = end + 1;     //  Overwrite the dummy value.
+            // Note this is a C++ 20 feature:
             program.push_back( { .operand=( start + 1 ) } );
         }
     }
 
 public:
     void plantProgram() {
-        for (;;) {
+        while (true) {
             char ch = input.get();
             break_unless( input.good() );
             plantChar( ch );
         }
-        program.push_back( { opcode_map.at('\0') } );
+        program.push_back( { opcode_map[OperatorToOpCodeIndex('\0')] } );
     }
 };
 
-typedef unsigned char num;
+using num = unsigned char;
 
 class Engine {
-    std::map<char, OpCode> opcode_map;
+    std::array<numberOfOpCodes, OpCode> opcode_map;
     std::vector<Instruction> program;
     std::vector<num> memory;
 public:
@@ -114,98 +134,78 @@ public:
         }
 
         opcode_map = {
-            { '+', &&INCR },
-            { '-', &&DECR },
-            { '<', &&LEFT },
-            { '>', &&RIGHT },
-            { '[', &&OPEN },
-            { ']', &&CLOSE },
-            { '.', &&PUT },
-            { ',', &&GET },
-            { '\0', &&HALT }
+            { &&INCR },
+            { &&DECR },
+            { &&LEFT },
+            { &&RIGHT },
+            { &&OPEN },
+            { &&CLOSE },
+            { &&PUT },
+            { &&GET },
+            { &&HALT }
         };
         
-        CodePlanter planter( filename, opcode_map, program );
+        CodePlanter planter{ filename, opcode_map, program };
         planter.plantProgram();
 
         std::noskipws( std::cin );
 
-        auto program_data = program.data();
-        Instruction * pc = &program_data[0];
-        num * loc = &memory.data()[0];
+        auto program_data = program.begin();
+        auto loc = memory.begin();
         goto *(pc++->opcode);
 
         ////////////////////////////////////////////////////////////////////////
         //  Control flow does not reach this position! 
         //  Instructions are listed below.
         ////////////////////////////////////////////////////////////////////////
+        
+        // Give hints to the compiler
+#        if defined(_MSC_VER) && !defined(__clang__) // MSVC
+            __assume(false);
+#        else // GCC, Clang
+            __builtin_unreachable();
+#        endif
 
-    INCR:
-        if ( DEBUG ) std::cout << "INCR" << std::endl;
-        *loc += 1;
-        goto *(pc++->opcode);
-    DECR:
-        if ( DEBUG ) std::cout << "DECR" << std::endl;
-        *loc -= 1;
-        goto *(pc++->opcode);
-    RIGHT:
-        if ( DEBUG ) std::cout << "RIGHT" << std::endl;
-        loc += 1;
-        goto *(pc++->opcode);
-    LEFT:
-        if ( DEBUG ) std::cout << "LEFT" << std::endl;
-        loc -= 1;
-        goto *(pc++->opcode);
-    PUT:
-        if ( DEBUG ) std::cout << "PUT" << std::endl;
-        {
-            num i = *loc;
-            std::cout << i;
-        }
-        goto *(pc++->opcode);
-    GET:
-        if ( DEBUG ) std::cout << "GET" << std::endl;
-        {
+#        define ON_LABEL_DO ( LABEL , code ) LABEL: if (DEBUG) std::cout << #LABEL << /*flush*/ std::endl; [&](){ code }(); goto *(pc++->opcode)
+    ON_LABEL_DO(INCR, *loc += 1; );
+    ON_LABEL_DO(DECR, *loc -= 1; );
+    ON_LABEL_DO(RIGHT, std::next(loc));
+    ON_LABEL_DO(LEFT, std::prev(loc));
+    ON_LABEL_DO(PUT, std::cout << *loc; );
+    ON_LABEL_DO(GET, 
             char ch;
             std::cin.get( ch );
             if (std::cin.good()) {
                 *loc = ch;
             }
-        }
-        goto *(pc++->opcode);
-    OPEN:
-        if ( DEBUG ) std::cout << "OPEN" << std::endl;
-        {
+        ); 
+    ON_LABEL_DO(OPEN,
             int n = pc++->operand;
             if ( *loc == 0 ) {
-                pc = &program_data[n];
+                pc = std::advance(program_data.begin(), n);
             }
-            goto *(pc++->opcode);
-        }
-    CLOSE:
-        if ( DEBUG ) std::cout << "CLOSE" << std::endl;
-        {
+        );
+    ON_LABEL_DO(CLOSE,
             int n = pc++->operand;
-            if ( *loc != 0 ) {
-                pc = &program_data[n];
+            if ( *loc == 0 ) {
+                pc = std::advance(program_data.begin(), n);
             }
-            goto *(pc++->opcode);
-        }
+        );
     HALT:
         if ( DEBUG ) std::cout << "DONE!" << std::endl;
         return;
-    }
-};
+    } // End function
+}; // End class
 
 /*
 Each argument is the name of a Brainf*ck source file to be compiled into
 threaded coded and executed.
 */
 int main( int argc, char * argv[] ) {
-    const std::vector<std::string_view> args(argv + 1, argv + argc);
+    const std::vector<std::string_view> args(std::next(argv), std::advance(argv, argc));
     for (auto arg : args) {
         Engine engine;
         engine.runFile( arg, args.size() > 1 );
     }
-    exit( EXIT_SUCCESS );
+    return 0;
 }
