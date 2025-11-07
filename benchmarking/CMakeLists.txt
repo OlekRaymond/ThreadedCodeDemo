@@ -31,8 +31,9 @@ if(NOT benchmark_FOUND)
 endif()
 
 set(SRC_FILES 
-    # main1.cpp 
+    ComputedGotos.cpp 
     main2.cpp
+    Switch.cpp
 )
 
 if(ENABLE_PROFILING)

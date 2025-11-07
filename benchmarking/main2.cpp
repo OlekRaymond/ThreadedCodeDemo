@@ -601,7 +601,7 @@ static void LabelsLambdas(benchmark::State& state) {
     Engine engine{};
     std::ostringstream output{};
     for (auto _ : state) {
-        engine.runFileLambdas( "../../sierpinski.bf", false, output);
+        engine.runFileLambdas( "../sierpinski.bf", false, output);
     }
 }
 BENCHMARK(LabelsLambdas);
@@ -650,23 +650,3 @@ TEST( DirectThreadedCode, NoChange ) {
 
 } // namespace two
 
-int main(int argc, char** argv) {   
-    benchmark::MaybeReenterWithoutASLR(argc, argv);
-    {
-        ::testing::InitGoogleTest(&argc, argv);
-        const auto test_result = RUN_ALL_TESTS();
-        if (test_result != 0) {
-            std::cout << "Did not run benchmarks due to test failures." << std::endl;
-            return test_result;
-        }
-    }
-    char arg0_default[] = "benchmark";
-    char* args_default = arg0_default;
-    if (!argv) {                      
-        argc = 1;                       
-        argv = &args_default;           
-    }                                 
-    ::benchmark::Initialize(&argc, argv);
-    ::benchmark::RunSpecifiedBenchmarks();
-    ::benchmark::Shutdown();
-}
